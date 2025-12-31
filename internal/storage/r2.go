@@ -90,3 +90,15 @@ func (r *R2Client) ObjectExists(ctx context.Context, key string) (bool, error) {
 
 	return true, nil
 }
+
+// HealthCheck verifies R2 connectivity by checking if the bucket exists
+// This is a lightweight operation (HeadBucket) that doesn't transfer data
+func (r *R2Client) HealthCheck(ctx context.Context) error {
+	_, err := r.client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(r.bucketName),
+	})
+	if err != nil {
+		return fmt.Errorf("R2 bucket check failed: %w", err)
+	}
+	return nil
+}

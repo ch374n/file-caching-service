@@ -57,3 +57,8 @@ func (c *RedisCache) Set(ctx context.Context, key string, data []byte) error {
 func (c *RedisCache) Close() error {
 	return c.client.Close()
 }
+
+// Ping checks if Redis connection is alive
+func (c *RedisCache) Ping(ctx context.Context) error {
+	return c.client.Ping(ctx).Err()
+}

@@ -81,9 +81,42 @@ func main() {
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	health := map[string]string{
+		"status": "healthy",
+	}
+
+	// Check Redis (optional - doesn't affect overall health)
+	if fileCache != nil {
+		if err := fileCache.Ping(ctx); err != nil {
+			health["redis"] = "unhealthy: " + err.Error()
+		} else {
+			health["redis"] = "healthy"
+		}
+	} else {
+		health["redis"] = "disabled"
+	}
+
+	// Check R2 (required - affects overall health)
+	// We do a lightweight check by listing with max 1 result
+	if err := fileStorage.HealthCheck(ctx); err != nil {
+		health["status"] = "unhealthy"
+		health["r2"] = "unhealthy: " + err.Error()
+		writeJSON(w, http.StatusServiceUnavailable, Response{
+			Success: false,
+			Message: "Service is unhealthy",
+			Data:    health,
+		})
+		return
+	}
+	health["r2"] = "healthy"
+
 	writeJSON(w, http.StatusOK, Response{
 		Success: true,
 		Message: "Service is healthy",
+		Data:    health,
 	})
 }
 
