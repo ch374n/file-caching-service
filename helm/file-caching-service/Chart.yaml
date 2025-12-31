@@ -1,0 +1,10 @@
+apiVersion: v2
+name: file-caching-service
+description: A Helm chart for file caching service with R2 storage and Redis cache
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+
+maintainers:
+  - name: ch374n
+

@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "file-caching-service.fullname" . }}
+  labels:
+    {{- include "file-caching-service.labels" . | nindent 4 }}
+data:
+  PORT: {{ .Values.config.port | quote }}
+  CACHE_TTL: {{ .Values.config.cacheTTL | quote }}
+  REDIS_ADDR: {{ .Values.redis.addr | quote }}
+  REDIS_DB: {{ .Values.redis.db | quote }}
+  R2_ACCOUNT_ID: {{ .Values.r2.accountId | quote }}
+  R2_BUCKET_NAME: {{ .Values.r2.bucketName | quote }}
