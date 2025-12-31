@@ -1,0 +1,81 @@
+# Default values for file-caching-service
+
+replicaCount: 2
+
+image:
+  repository: file-caching-service
+  pullPolicy: Never
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: files.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Application configuration
+config:
+  port: "8080"
+  cacheTTL: "1h"
+
+# Redis configuration
+redis:
+  addr: ""
+  db: "0"
+
+# R2 configuration
+r2:
+  accountId: ""
+  bucketName: ""
+
+# Secrets
+secrets:
+  redisPassword: ""
+  r2AccessKeyId: ""
+  r2SecretAccessKey: ""
