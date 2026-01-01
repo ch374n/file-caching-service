@@ -7,9 +7,10 @@ import (
 )
 
 type Config struct {
-	Port  string
-	Redis RedisConfig
-	R2    R2Config
+	Port     string
+	LogLevel string // Add this
+	Redis    RedisConfig
+	R2       R2Config
 }
 
 type RedisConfig struct {
@@ -28,7 +29,8 @@ type R2Config struct {
 
 func Load() *Config {
 	return &Config{
-		Port: getEnv("PORT", "8080"),
+		Port:     getEnv("PORT", "8080"),
+		LogLevel: getEnv("LOG_LEVEL", "info"),
 		Redis: RedisConfig{
 			Addr:     getEnv("REDIS_ADDR", "localhost:6379"),
 			Password: getEnv("REDIS_PASSWORD", ""),

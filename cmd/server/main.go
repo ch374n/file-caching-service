@@ -3,16 +3,20 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"log"
+	"log/slog"
 	"mime"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/ch374n/file-downloader/internal/cache"
 	"github.com/ch374n/file-downloader/internal/config"
+	"github.com/ch374n/file-downloader/internal/logger"
+	"github.com/ch374n/file-downloader/internal/metrics"
 	"github.com/ch374n/file-downloader/internal/storage"
 )
 
@@ -30,6 +34,9 @@ type Response struct {
 func main() {
 	cfg := config.Load()
 
+	// Initialize structured logger
+	logger.Init(cfg.LogLevel)
+
 	// Initialize Redis cache (optional - service works without it)
 	var err error
 	fileCache, err = cache.NewRedisCache(
@@ -39,15 +46,15 @@ func main() {
 		cfg.Redis.CacheTTL,
 	)
 	if err != nil {
-		log.Printf("WARNING: Redis unavailable, running without cache: %v", err)
-		fileCache = nil // Explicitly set to nil for clarity
+		slog.Warn("Redis unavailable, running without cache", "error", err)
+		fileCache = nil
 	} else {
 		defer func() {
 			if err := fileCache.Close(); err != nil {
-				log.Printf("Failed to close Redis cache: %v", err)
+				slog.Error("Failed to close Redis cache", "error", err)
 			}
 		}()
-		log.Printf("Connected to Redis at %s", cfg.Redis.Addr)
+		slog.Info("Connected to Redis", "addr", cfg.Redis.Addr)
 	}
 
 	// Initialize R2 storage
@@ -58,26 +65,69 @@ func main() {
 		cfg.R2.BucketName,
 	)
 	if err != nil {
-		log.Fatalf("Failed to initialize R2 client: %v", err)
+		slog.Error("Failed to initialize R2 client", "error", err)
+		panic(err)
 	}
-	log.Printf("Connected to R2 bucket: %s", cfg.R2.BucketName)
+	slog.Info("Connected to R2 bucket", "bucket", cfg.R2.BucketName)
 
 	mux := http.NewServeMux()
 
+	// Endpoints
 	mux.HandleFunc("GET /health", healthHandler)
 	mux.HandleFunc("GET /", rootHandler)
-	mux.HandleFunc("GET /files/{name}", getFileHandler)
+	mux.HandleFunc("GET /files/{name}", metricsMiddleware(getFileHandler))
+
+	// Prometheus metrics endpoint
+	mux.Handle("GET /metrics", promhttp.Handler())
 
 	server := &http.Server{
 		Addr:    ":" + cfg.Port,
 		Handler: mux,
 	}
 
-	log.Printf("Starting server on port %s", cfg.Port)
+	slog.Info("Starting server", "port", cfg.Port)
 
 	if err = server.ListenAndServe(); err != nil {
-		log.Fatalf("Server failed to start: %v", err)
+		slog.Error("Server failed to start", "error", err)
+		panic(err)
 	}
+}
+
+// metricsMiddleware wraps a handler to record HTTP metrics
+func metricsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// Wrap response writer to capture status code
+		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+
+		next(wrapped, r)
+
+		duration := time.Since(start).Seconds()
+		path := r.URL.Path
+		method := r.Method
+		status := strconv.Itoa(wrapped.statusCode)
+
+		metrics.HTTPRequestsTotal.WithLabelValues(method, path, status).Inc()
+		metrics.HTTPRequestDuration.WithLabelValues(method, path).Observe(duration)
+
+		slog.Info("Request completed",
+			"method", method,
+			"path", path,
+			"status", wrapped.statusCode,
+			"duration_ms", duration*1000,
+		)
+	}
+}
+
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -100,7 +150,6 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check R2 (required - affects overall health)
-	// We do a lightweight check by listing with max 1 result
 	if err := fileStorage.HealthCheck(ctx); err != nil {
 		health["status"] = "unhealthy"
 		health["r2"] = "unhealthy: " + err.Error()
@@ -125,7 +174,7 @@ func rootHandler(w http.ResponseWriter, r *http.Request) {
 		Success: true,
 		Message: "File Caching Service",
 		Data: map[string]string{
-			"version": "0.1.0",
+			"version": "1.0.0",
 		},
 	})
 }
@@ -141,34 +190,43 @@ func getFileHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Add timeout for the entire request (30 seconds)
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
 	// Check cache only if Redis is available
 	if fileCache != nil {
+		start := time.Now()
 		data, found, err := fileCache.Get(ctx, filename)
+		metrics.CacheOperationDuration.WithLabelValues("get").Observe(time.Since(start).Seconds())
+
 		if err != nil {
-			log.Printf("Cache error for %s: %v", filename, err)
+			slog.Error("Cache error", "filename", filename, "error", err)
 		}
 
 		if found {
-			log.Printf("Cache HIT for file: %s", filename)
+			metrics.CacheHitsTotal.Inc()
+			slog.Info("Cache HIT", "filename", filename)
 			writeFileResponse(w, filename, data)
 			return
 		}
 
-		log.Printf("Cache MISS for file: %s", filename)
+		metrics.CacheMissesTotal.Inc()
+		slog.Info("Cache MISS", "filename", filename)
 	} else {
-		log.Printf("Cache disabled, fetching from R2: %s", filename)
+		slog.Info("Cache disabled, fetching from R2", "filename", filename)
 	}
 
+	// Fetch from R2
+	start := time.Now()
 	data, err := fileStorage.GetObject(ctx, filename)
-	if err != nil {
-		log.Printf("R2 error for %s: %v", filename, err)
+	duration := time.Since(start).Seconds()
+	metrics.R2RequestDuration.WithLabelValues("get").Observe(duration)
 
-		// Check if it's a timeout error
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+	if err != nil {
+		metrics.R2RequestsTotal.WithLabelValues("get", "error").Inc()
+		slog.Error("R2 error", "filename", filename, "error", err)
+
+		if ctx.Err() == context.DeadlineExceeded {
 			writeJSON(w, http.StatusGatewayTimeout, Response{
 				Success: false,
 				Message: "Request timeout",
@@ -183,6 +241,7 @@ func getFileHandler(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+
 		writeJSON(w, http.StatusInternalServerError, Response{
 			Success: false,
 			Message: "Failed to retrieve file",
@@ -190,19 +249,21 @@ func getFileHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	metrics.R2RequestsTotal.WithLabelValues("get", "success").Inc()
+
 	// Cache the file only if Redis is available
 	if fileCache != nil {
 		go func() {
-			// Use background context since HTTP request context will be cancelled
-			// after response is sent
 			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
+			start := time.Now()
 			if err := fileCache.Set(bgCtx, filename, data); err != nil {
-				log.Printf("Failed to cache file %s: %v", filename, err)
+				slog.Error("Failed to cache file", "filename", filename, "error", err)
 			} else {
-				log.Printf("Cached file: %s", filename)
+				slog.Info("Cached file", "filename", filename)
 			}
+			metrics.CacheOperationDuration.WithLabelValues("set").Observe(time.Since(start).Seconds())
 		}()
 	}
 
@@ -222,19 +283,14 @@ func writeFileResponse(w http.ResponseWriter, filename string, data []byte) {
 }
 
 func isNotFoundError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	msg := err.Error()
-	return strings.Contains(msg, "NoSuchKey") || strings.Contains(msg, "not found")
+	return strings.Contains(err.Error(), "NoSuchKey") ||
+		strings.Contains(err.Error(), "not found")
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.Printf("Error encoding JSON response: %v", err)
+		slog.Error("Error encoding JSON response", "error", err)
 	}
 }
