@@ -8,19 +8,47 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// RedisConfig holds all Redis connection settings
+type RedisConfig struct {
+	Addr         string
+	Password     string
+	DB           int
+	TTL          time.Duration
+	DialTimeout  time.Duration
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+}
+
 type RedisCache struct {
 	client *redis.Client
 	ttl    time.Duration
 }
 
-func NewRedisCache(addr, password string, db int, ttl time.Duration) (*RedisCache, error) {
+// NewRedisCache creates a new Redis cache with the given configuration
+func NewRedisCache(cfg RedisConfig) (*RedisCache, error) {
 	client := redis.NewClient(&redis.Options{
-		Addr:     addr,
-		Password: password,
-		DB:       db,
+		Addr:     cfg.Addr,
+		Password: cfg.Password,
+		DB:       cfg.DB,
+
+		// Connection timeouts from config
+		DialTimeout:  cfg.DialTimeout,
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
+
+		// Connection pool settings
+		PoolSize:     10,
+		MinIdleConns: 2,
+		PoolTimeout:  cfg.ReadTimeout,
+
+		// Retry settings
+		MaxRetries:      3,
+		MinRetryBackoff: 100 * time.Millisecond,
+		MaxRetryBackoff: 500 * time.Millisecond,
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Use dial timeout for ping
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.DialTimeout+5*time.Second)
 	defer cancel()
 
 	if err := client.Ping(ctx).Err(); err != nil {
@@ -29,7 +57,7 @@ func NewRedisCache(addr, password string, db int, ttl time.Duration) (*RedisCach
 
 	return &RedisCache{
 		client: client,
-		ttl:    ttl,
+		ttl:    cfg.TTL,
 	}, nil
 }
 

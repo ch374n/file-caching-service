@@ -1,0 +1,27 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "file-caching-service.fullname" . }}
+  labels:
+    {{- include "file-caching-service.labels" . | nindent 4 }}
+    # This label is important - Prometheus selects ServiceMonitors by label
+    release: prometheus
+spec:
+  # Which service to scrape
+  selector:
+    matchLabels:
+      {{- include "file-caching-service.selectorLabels" . | nindent 6 }}
+
+  # Which namespace(s) to look in
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+
+  # Scrape configuration
+  endpoints:
+    - port: http           # Must match service port name
+      path: /metrics       # Metrics endpoint
+      interval: 15s        # How often to scrape
+      scrapeTimeout: 10s   # Timeout for each scrape
+{{- end }}

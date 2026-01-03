@@ -37,24 +37,36 @@ func main() {
 	// Initialize structured logger
 	logger.Init(cfg.LogLevel)
 
-	// Initialize Redis cache (optional - service works without it)
+	// Initialize Redis cache based on mode
 	var err error
-	fileCache, err = cache.NewRedisCache(
-		cfg.Redis.Addr,
-		cfg.Redis.Password,
-		cfg.Redis.DB,
-		cfg.Redis.CacheTTL,
-	)
-	if err != nil {
-		slog.Warn("Redis unavailable, running without cache", "error", err)
+	switch cfg.Redis.Mode {
+	case config.RedisModeDisabled:
+		slog.Info("Redis caching disabled")
 		fileCache = nil
-	} else {
-		defer func() {
-			if err := fileCache.Close(); err != nil {
-				slog.Error("Failed to close Redis cache", "error", err)
-			}
-		}()
-		slog.Info("Connected to Redis", "addr", cfg.Redis.Addr)
+	case config.RedisModeEnabled:
+		fileCache, err = cache.NewRedisCache(cache.RedisConfig{
+			Addr:         cfg.Redis.Addr,
+			Password:     cfg.Redis.Password,
+			DB:           cfg.Redis.DB,
+			TTL:          cfg.Redis.CacheTTL,
+			DialTimeout:  cfg.Redis.DialTimeout,
+			ReadTimeout:  cfg.Redis.ReadTimeout,
+			WriteTimeout: cfg.Redis.WriteTimeout,
+		})
+		if err != nil {
+			slog.Warn("Redis unavailable, running without cache",
+				"addr", cfg.Redis.Addr,
+				"error", err,
+			)
+			fileCache = nil
+		} else {
+			defer func() {
+				if err := fileCache.Close(); err != nil {
+					slog.Error("Failed to close Redis cache", "error", err)
+				}
+			}()
+			slog.Info("Connected to Redis", "addr", cfg.Redis.Addr)
+		}
 	}
 
 	// Initialize R2 storage
@@ -254,7 +266,7 @@ func getFileHandler(w http.ResponseWriter, r *http.Request) {
 	// Cache the file only if Redis is available
 	if fileCache != nil {
 		go func() {
-			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
 			start := time.Now()

@@ -3,21 +3,36 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
+)
+
+// RedisMode defines how Redis is configured
+type RedisMode string
+
+const (
+	RedisModeDisabled RedisMode = "disabled" // No caching
+	RedisModeEnabled  RedisMode = "enabled"  // Redis caching enabled
 )
 
 type Config struct {
 	Port     string
-	LogLevel string // Add this
+	LogLevel string
 	Redis    RedisConfig
 	R2       R2Config
 }
 
 type RedisConfig struct {
+	Mode     RedisMode
 	Addr     string
 	Password string
 	DB       int
 	CacheTTL time.Duration
+
+	// Timeout settings (optimized for in-cluster Redis)
+	DialTimeout  time.Duration
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
 }
 
 type R2Config struct {
@@ -28,14 +43,20 @@ type R2Config struct {
 }
 
 func Load() *Config {
+	redisMode := parseRedisMode(getEnv("REDIS_MODE", "enabled"))
+
 	return &Config{
 		Port:     getEnv("PORT", "8080"),
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 		Redis: RedisConfig{
-			Addr:     getEnv("REDIS_ADDR", "localhost:6379"),
-			Password: getEnv("REDIS_PASSWORD", ""),
-			DB:       getEnvAsInt("REDIS_DB", 0),
-			CacheTTL: getEnvAsDuration("CACHE_TTL", 5*time.Minute),
+			Mode:         redisMode,
+			Addr:         getEnv("REDIS_ADDR", "localhost:6379"),
+			Password:     getEnv("REDIS_PASSWORD", ""),
+			DB:           getEnvAsInt("REDIS_DB", 0),
+			CacheTTL:     getEnvAsDuration("CACHE_TTL", 5*time.Minute),
+			DialTimeout:  getEnvAsDuration("REDIS_DIAL_TIMEOUT", 2*time.Second),
+			ReadTimeout:  getEnvAsDuration("REDIS_READ_TIMEOUT", 5*time.Second),
+			WriteTimeout: getEnvAsDuration("REDIS_WRITE_TIMEOUT", 5*time.Second),
 		},
 		R2: R2Config{
 			AccountID:       getEnv("R2_ACCOUNT_ID", ""),
@@ -43,6 +64,15 @@ func Load() *Config {
 			SecretAccessKey: getEnv("R2_SECRET_ACCESS_KEY", ""),
 			BucketName:      getEnv("R2_BUCKET_NAME", ""),
 		},
+	}
+}
+
+func parseRedisMode(mode string) RedisMode {
+	switch strings.ToLower(mode) {
+	case "disabled", "none", "off", "false":
+		return RedisModeDisabled
+	default:
+		return RedisModeEnabled
 	}
 }
 
