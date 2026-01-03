@@ -7,7 +7,17 @@ metadata:
 data:
   PORT: {{ .Values.config.port | quote }}
   CACHE_TTL: {{ .Values.config.cacheTTL | quote }}
-  REDIS_ADDR: {{ .Values.redis.addr | quote }}
+
+  # Redis configuration
+  {{- if .Values.redis.enabled }}
+  REDIS_MODE: "enabled"
+  REDIS_ADDR: "{{ include "file-caching-service.fullname" . }}-redis:6379"
+  {{- else }}
+  REDIS_MODE: "disabled"
+  REDIS_ADDR: ""
+  {{- end }}
   REDIS_DB: {{ .Values.redis.db | quote }}
+
+  # R2 configuration
   R2_ACCOUNT_ID: {{ .Values.r2.accountId | quote }}
   R2_BUCKET_NAME: {{ .Values.r2.bucketName | quote }}

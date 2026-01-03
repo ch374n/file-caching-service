@@ -4,6 +4,22 @@
 version: '3.8'
 
 services:
+  # Internal Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # File Caching Service Application
   app:
     build: .
@@ -12,13 +28,17 @@ services:
       - "8080:8080"
     environment:
       - PORT=8080
-      - REDIS_ADDR=${REDIS_ADDR}
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      # Redis configuration - uses internal Redis
+      - REDIS_MODE=enabled
+      - REDIS_ADDR=redis:6379
+      # R2 configuration
       - R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
       - R2_BUCKET_NAME=${R2_BUCKET_NAME}
-      - R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   # Prometheus - Metrics Collection
@@ -82,6 +102,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  redis_data:
   prometheus_data:
   loki_data:
   grafana_data:

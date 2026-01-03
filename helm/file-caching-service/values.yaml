@@ -64,9 +64,18 @@ config:
   port: "8080"
   cacheTTL: "1h"
 
-# Redis configuration
+# Redis configuration (internal, runs in-cluster)
 redis:
-  addr: ""
+  # enabled: true to deploy Redis, false to disable caching
+  enabled: true
+  image: redis:7-alpine
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
   db: "0"
 
 # R2 configuration
@@ -74,8 +83,14 @@ r2:
   accountId: ""
   bucketName: ""
 
-# Secrets
+# Secrets (base64 encoded values will be created)
 secrets:
-  redisPassword: ""
   r2AccessKeyId: ""
   r2SecretAccessKey: ""
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    scrapeTimeout: 10s

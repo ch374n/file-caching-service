@@ -1,0 +1,57 @@
+# Prometheus Operator + Prometheus + Grafana + Alertmanager
+prometheus:
+  prometheusSpec:
+    # Startup duration (must be >= 60)
+    maximumStartupDurationSeconds: 60
+
+    # Scrape interval
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+
+    # Select all ServiceMonitors across namespaces
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelector: {}
+    serviceMonitorNamespaceSelector: {}
+
+    # Retention
+    retention: 7d
+
+    # Storage (optional - for persistence)
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+
+grafana:
+  enabled: true
+  adminPassword: admin
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      access: proxy
+      url: http://loki.monitoring.svc.cluster.local:3100
+      isDefault: false
+      jsonData:
+        maxLines: 1000
+
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: 'custom'
+          orgId: 1
+          folder: 'Custom'
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/custom
+
+  dashboardsConfigMaps:
+    custom: "grafana-dashboards"
+
+alertmanager:
+  enabled: true

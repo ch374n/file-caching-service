@@ -28,3 +28,10 @@ Thumbs.db
 
 # Build output
 dist/
+
+# Port forward PIDs (from Makefile)
+.pids/
+
+# Logs
+logs/
+
