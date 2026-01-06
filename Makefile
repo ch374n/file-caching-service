@@ -150,6 +150,7 @@ kind-deploy: ## Deploy application to Kind cluster using Helm
 		--set image.repository=$(APP_NAME) \
 		--set image.tag=latest \
 		--set image.pullPolicy=Never \
+		--set replicaCount=1 \
 		--set redis.enabled=true \
 		--set metrics.serviceMonitor.enabled=false \
 		--set r2.accountId="$(R2_ACCOUNT_ID)" \
@@ -161,15 +162,22 @@ kind-deploy: ## Deploy application to Kind cluster using Helm
 
 kind-wait-ready: ## Wait for pods to be ready in Kind cluster
 	@echo "$(GREEN)Waiting for pods to be ready...$(NC)"
-	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=$(APP_NAME) -n $(NAMESPACE) --timeout=120s
-	kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=redis -n $(NAMESPACE) --timeout=120s
+	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=$(APP_NAME) -n $(NAMESPACE) --timeout=180s
+	kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=redis -n $(NAMESPACE) --timeout=180s
+	@echo "$(GREEN)Checking pod status...$(NC)"
 	kubectl get pods -n $(NAMESPACE)
+	@echo "$(GREEN)Checking pod logs...$(NC)"
+	kubectl logs -l app.kubernetes.io/name=$(APP_NAME) -n $(NAMESPACE) --tail=20 || true
 
 kind-port-forward: ## Start port-forward to Kind cluster (background)
 	@echo "$(GREEN)Starting port-forward...$(NC)"
-	@pkill -f "kubectl port-forward svc/$(HELM_RELEASE)" 2>/dev/null || true
-	kubectl port-forward svc/$(HELM_RELEASE) 8080:80 -n $(NAMESPACE) &
+	@pkill -f "kubectl port-forward" 2>/dev/null || true
+	@sleep 2
+	@echo "$(GREEN)Port-forwarding to service...$(NC)"
+	@kubectl port-forward svc/$(HELM_RELEASE) 8080:80 -n $(NAMESPACE) &
 	@sleep 5
+	@echo "$(GREEN)Testing connection...$(NC)"
+	@curl -s http://localhost:8080/health || echo "$(RED)Connection test failed$(NC)"
 	@echo "$(GREEN)Service available at http://localhost:8080$(NC)"
 
 kind-run-tests: ## Run integration tests against Kind cluster

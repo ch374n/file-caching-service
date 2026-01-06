@@ -47,27 +47,39 @@ jobs:
 
       - name: Wait for pods to be ready
         run: |
-          make kind-wait-ready
-          echo "Waiting additional 30s for Redis to be fully ready..."
-          sleep 30
+          echo "Waiting for pods to be ready..."
+          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=file-caching-service -n default --timeout=180s
+          echo "=== Pod Status ==="
+          kubectl get pods -n default
+          echo "=== Pod Logs ==="
+          kubectl logs -l app.kubernetes.io/name=file-caching-service --tail=30 || true
 
       - name: Run integration tests
         run: |
-          # Start port-forward in background
-          kubectl port-forward svc/file-caching-service 8080:80 &
+          # Get the pod name
+          POD_NAME=$(kubectl get pod -l app.kubernetes.io/name=file-caching-service -n default -o jsonpath='{.items[0].metadata.name}')
+          echo "Found pod: $POD_NAME"
+          
+          # Start port-forward to pod directly (port 8080 inside container)
+          kubectl port-forward pod/$POD_NAME 8080:8080 &
           PF_PID=$!
           sleep 5
           
           # Verify service is ready
           echo "Verifying service is ready..."
           for i in {1..30}; do
-            if curl -s http://localhost:8080/health | grep -q "success"; then
+            RESPONSE=$(curl -s http://localhost:8080/health || echo "connection_failed")
+            if echo "$RESPONSE" | grep -q "success"; then
               echo "Service is ready!"
               break
             fi
+            
             if [ $i -eq 30 ]; then
               echo "Service failed to become ready"
-              kubectl logs -l app.kubernetes.io/name=file-caching-service --tail=50
+              echo "=== Pod logs ==="
+              kubectl logs $POD_NAME --tail=100
+              echo "=== Pod describe ==="
+              kubectl describe pod $POD_NAME
               kill $PF_PID 2>/dev/null || true
               exit 1
             fi
