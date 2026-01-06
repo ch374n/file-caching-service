@@ -1,0 +1,71 @@
+# golangci-lint configuration
+# https://golangci-lint.run/usage/configuration/
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck      # Check for unchecked errors
+    - gosimple      # Simplify code
+    - govet         # Reports suspicious constructs
+    - ineffassign   # Detects unused assignments
+    - staticcheck   # Static analysis checks
+    - unused        # Checks for unused code
+    - gofmt         # Check if code is formatted
+    - goimports     # Check imports are sorted
+    - misspell      # Check for misspelled words
+    - bodyclose     # Checks whether HTTP response body is closed
+    - gosec         # Security checks
+    - gocritic      # Opinionated linter
+
+  disable:
+    - depguard      # Dependency guard (not needed)
+
+linters-settings:
+  errcheck:
+    # Don't check for errors on these functions
+    exclude-functions:
+      - (io.Writer).Write
+      - (*os.File).Close
+      - (net/http.ResponseWriter).Write
+
+  govet:
+    enable-all: true
+    disable:
+      - shadow  # Too many false positives
+
+  gosec:
+    excludes:
+      - G104  # Unhandled errors (we use errcheck for this)
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - performance
+    disabled-checks:
+      - hugeParam  # Too strict for our use case
+
+issues:
+  # Don't limit the number of issues per linter
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    # Ignore certain linters in test files
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+        - gocritic
+
+    # Ignore unused parameters in test helpers
+    - path: _test\.go
+      text: "unused-parameter"
+
+    # Ignore long lines in generated files
+    - path: ".*\\.gen\\.go"
+      linters:
+        - lll
+
