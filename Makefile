@@ -25,18 +25,29 @@ YELLOW := \033[0;33m
 RED := \033[0;31m
 NC := \033[0m # No Color
 
-#==============================================================================
-# Help
-#==============================================================================
-
 help: ## Show this help message
 	@echo "$(GREEN)File Caching Service - Makefile Commands$(NC)"
 	@echo ""
 	@echo "$(YELLOW)Local Development:$(NC)"
 	@echo "  $(GREEN)build$(NC)                     Build the Go application locally"
 	@echo "  $(GREEN)run$(NC)                       Run the application locally"
-	@echo "  $(GREEN)test$(NC)                      Run tests"
+	@echo "  $(GREEN)test$(NC)                      Run unit tests"
+	@echo "  $(GREEN)test-coverage$(NC)             Run tests with coverage report"
+	@echo "  $(GREEN)test-coverage-html$(NC)        Generate HTML coverage report"
+	@echo "  $(GREEN)test-integration$(NC)          Run integration tests (requires Redis)"
+	@echo "  $(GREEN)test-bench$(NC)                Run benchmark tests"
 	@echo "  $(GREEN)clean$(NC)                     Clean build artifacts"
+	@echo ""
+	@echo "$(YELLOW)Kind Integration Tests:$(NC)"
+	@echo "  $(GREEN)kind-create$(NC)               Create Kind cluster"
+	@echo "  $(GREEN)kind-delete$(NC)               Delete Kind cluster"
+	@echo "  $(GREEN)kind-load-image$(NC)           Build and load Docker image into Kind"
+	@echo "  $(GREEN)kind-deploy$(NC)               Deploy app to Kind with Helm"
+	@echo "  $(GREEN)kind-wait-ready$(NC)           Wait for pods to be ready"
+	@echo "  $(GREEN)kind-port-forward$(NC)         Start port-forward to Kind"
+	@echo "  $(GREEN)kind-run-tests$(NC)            Run integration tests"
+	@echo "  $(GREEN)kind-test$(NC)                 Full integration test pipeline"
+	@echo "  $(GREEN)kind-test-cleanup$(NC)         Full test with cleanup"
 	@echo ""
 	@echo "$(YELLOW)Docker:$(NC)"
 	@echo "  $(GREEN)docker-build$(NC)              Build Docker image"
@@ -77,10 +88,6 @@ help: ## Show this help message
 	@echo "  $(GREEN)shell-app$(NC)                 Open shell in application pod"
 	@echo "  $(GREEN)describe-app$(NC)              Describe application pod"
 
-#==============================================================================
-# Local Development
-#==============================================================================
-
 build: ## Build the Go application locally
 	@echo "$(GREEN)Building Go application...$(NC)"
 	go build -o bin/$(APP_NAME) cmd/server/main.go
@@ -91,16 +98,94 @@ run: ## Run the application locally
 
 test: ## Run tests
 	@echo "$(GREEN)Running tests...$(NC)"
-	go test -v ./...
+	go test -v ./internal/... -short
+
+test-coverage: ## Run tests with coverage
+	@echo "$(GREEN)Running tests with coverage...$(NC)"
+	go test -v ./internal/... -short -coverprofile=coverage.out -covermode=atomic
+	go tool cover -func=coverage.out
+	@echo "$(GREEN)Coverage report generated: coverage.out$(NC)"
+
+test-coverage-html: test-coverage ## Generate HTML coverage report
+	@echo "$(GREEN)Generating HTML coverage report...$(NC)"
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "$(GREEN)Coverage report: coverage.html$(NC)"
+	open coverage.html
+
+test-integration: ## Run integration tests (requires Redis)
+	@echo "$(GREEN)Running integration tests...$(NC)"
+	go test -v ./internal/...
+
+test-bench: ## Run benchmark tests
+	@echo "$(GREEN)Running benchmark tests...$(NC)"
+	go test -bench=. -benchmem ./internal/handlers/
+
+KIND_CLUSTER_NAME := file-caching-test
+
+kind-create: ## Create Kind cluster for integration testing
+	@echo "$(GREEN)Creating Kind cluster: $(KIND_CLUSTER_NAME)...$(NC)"
+	@if kind get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER_NAME)$$"; then \
+		echo "$(YELLOW)Cluster already exists$(NC)"; \
+	else \
+		kind create cluster --name $(KIND_CLUSTER_NAME) --wait 60s; \
+	fi
+	kubectl cluster-info --context kind-$(KIND_CLUSTER_NAME)
+
+kind-delete: ## Delete Kind cluster
+	@echo "$(YELLOW)Deleting Kind cluster: $(KIND_CLUSTER_NAME)...$(NC)"
+	kind delete cluster --name $(KIND_CLUSTER_NAME) 2>/dev/null || true
+
+kind-load-image: docker-build ## Build and load Docker image into Kind cluster
+	@echo "$(GREEN)Loading image into Kind cluster...$(NC)"
+	kind load docker-image $(DOCKER_IMAGE) --name $(KIND_CLUSTER_NAME)
+
+kind-deploy: ## Deploy application to Kind cluster using Helm
+	@echo "$(GREEN)Deploying to Kind cluster...$(NC)"
+	@if [ -z "$(R2_ACCOUNT_ID)" ]; then echo "$(RED)Error: R2_ACCOUNT_ID is required$(NC)"; exit 1; fi
+	@if [ -z "$(R2_ACCESS_KEY_ID)" ]; then echo "$(RED)Error: R2_ACCESS_KEY_ID is required$(NC)"; exit 1; fi
+	@if [ -z "$(R2_SECRET_ACCESS_KEY)" ]; then echo "$(RED)Error: R2_SECRET_ACCESS_KEY is required$(NC)"; exit 1; fi
+	@if [ -z "$(R2_BUCKET_NAME)" ]; then echo "$(RED)Error: R2_BUCKET_NAME is required$(NC)"; exit 1; fi
+	@helm upgrade --install $(HELM_RELEASE) ./helm/$(APP_NAME) \
+		--namespace $(NAMESPACE) \
+		--set image.repository=$(APP_NAME) \
+		--set image.tag=latest \
+		--set image.pullPolicy=Never \
+		--set redis.enabled=true \
+		--set metrics.serviceMonitor.enabled=false \
+		--set r2.accountId="$(R2_ACCOUNT_ID)" \
+		--set r2.bucketName="$(R2_BUCKET_NAME)" \
+		--set secrets.r2AccessKeyId="$(R2_ACCESS_KEY_ID)" \
+		--set secrets.r2SecretAccessKey="$(R2_SECRET_ACCESS_KEY)" \
+		--wait --timeout 5m
+	@echo "$(GREEN)Deployment complete!$(NC)"
+
+kind-wait-ready: ## Wait for pods to be ready in Kind cluster
+	@echo "$(GREEN)Waiting for pods to be ready...$(NC)"
+	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=$(APP_NAME) -n $(NAMESPACE) --timeout=120s
+	kubectl wait --for=condition=ready pod -l app.kubernetes.io/component=redis -n $(NAMESPACE) --timeout=120s
+	kubectl get pods -n $(NAMESPACE)
+
+kind-port-forward: ## Start port-forward to Kind cluster (background)
+	@echo "$(GREEN)Starting port-forward...$(NC)"
+	@pkill -f "kubectl port-forward svc/$(HELM_RELEASE)" 2>/dev/null || true
+	kubectl port-forward svc/$(HELM_RELEASE) 8080:80 -n $(NAMESPACE) &
+	@sleep 5
+	@echo "$(GREEN)Service available at http://localhost:8080$(NC)"
+
+kind-run-tests: ## Run integration tests against Kind cluster
+	@echo "$(GREEN)Running integration tests...$(NC)"
+	SERVICE_URL=http://localhost:8080 go test -v ./tests/integration/... -timeout 5m
+
+kind-test: kind-create kind-load-image kind-deploy kind-wait-ready kind-port-forward kind-run-tests ## Full integration test pipeline
+	@echo "$(GREEN)Integration tests completed!$(NC)"
+
+kind-test-cleanup: kind-test kind-delete ## Full integration test with cleanup
+	@echo "$(GREEN)Integration tests completed and cluster deleted!$(NC)"
 
 clean: ## Clean build artifacts
 	@echo "$(GREEN)Cleaning...$(NC)"
 	rm -rf bin/
 	rm -rf logs/
-
-#==============================================================================
-# Docker
-#==============================================================================
 
 docker-build: ## Build Docker image
 	@echo "$(GREEN)Building Docker image...$(NC)"
@@ -130,10 +215,6 @@ docker-clean: docker-down ## Stop and remove Docker volumes
 	docker compose -f docker-compose.observability.yml down -v
 	docker rmi $(DOCKER_IMAGE) 2>/dev/null || true
 
-#==============================================================================
-# Kubernetes - Setup
-#==============================================================================
-
 k8s-setup: ## Initial Kubernetes setup (add helm repos, create namespaces)
 	@echo "$(GREEN)Setting up Kubernetes...$(NC)"
 	@echo "Adding Helm repositories..."
@@ -144,10 +225,6 @@ k8s-setup: ## Initial Kubernetes setup (add helm repos, create namespaces)
 	kubectl create namespace $(MONITORING_NAMESPACE) 2>/dev/null || true
 	kubectl create namespace $(NAMESPACE) 2>/dev/null || true
 	@echo "$(GREEN)Setup complete!$(NC)"
-
-#==============================================================================
-# Kubernetes - Full Stack
-#==============================================================================
 
 k8s-up: k8s-setup k8s-prometheus-up k8s-loki-up k8s-app-up ## Deploy everything to Kubernetes
 	@echo "$(GREEN)Full Kubernetes stack deployed!$(NC)"
@@ -166,10 +243,6 @@ k8s-status: ## Show status of all Kubernetes resources
 	@echo "$(GREEN)=== Helm Releases ===$(NC)"
 	helm list -A
 
-#==============================================================================
-# Kubernetes - Prometheus Stack (includes Grafana)
-#==============================================================================
-
 k8s-prometheus-up: k8s-setup ## Deploy Prometheus + Grafana to Kubernetes
 	@echo "$(GREEN)Deploying Prometheus stack...$(NC)"
 	helm upgrade --install $(PROMETHEUS_RELEASE) prometheus-community/kube-prometheus-stack \
@@ -183,10 +256,6 @@ k8s-prometheus-down: ## Remove Prometheus + Grafana from Kubernetes
 	helm uninstall $(PROMETHEUS_RELEASE) -n $(MONITORING_NAMESPACE) 2>/dev/null || true
 	@echo "$(GREEN)Prometheus stack removed!$(NC)"
 
-#==============================================================================
-# Kubernetes - Loki Stack (includes Promtail)
-#==============================================================================
-
 k8s-loki-up: k8s-setup ## Deploy Loki + Promtail to Kubernetes
 	@echo "$(GREEN)Deploying Loki stack...$(NC)"
 	helm upgrade --install $(LOKI_RELEASE) grafana/loki-stack \
@@ -199,10 +268,6 @@ k8s-loki-down: ## Remove Loki + Promtail from Kubernetes
 	@echo "$(YELLOW)Removing Loki stack...$(NC)"
 	helm uninstall $(LOKI_RELEASE) -n $(MONITORING_NAMESPACE) 2>/dev/null || true
 	@echo "$(GREEN)Loki stack removed!$(NC)"
-
-#==============================================================================
-# Kubernetes - Application
-#==============================================================================
 
 k8s-app-up: ## Deploy application with Redis to Kubernetes
 	@echo "$(GREEN)Deploying application with Redis...$(NC)"
@@ -230,10 +295,6 @@ k8s-app-down: ## Remove application from Kubernetes
 	@echo "$(YELLOW)Removing application...$(NC)"
 	helm uninstall $(HELM_RELEASE) -n $(NAMESPACE) 2>/dev/null || true
 	@echo "$(GREEN)Application removed!$(NC)"
-
-#==============================================================================
-# Port Forwarding
-#==============================================================================
 
 port-forward-grafana: ## Port forward Grafana (http://localhost:3000)
 	@echo "$(GREEN)Port forwarding Grafana to http://localhost:3000$(NC)"
@@ -279,10 +340,6 @@ stop-port-forwards: ## Stop all background port forwards
 	@if [ -f .pids/app.pid ]; then kill $$(cat .pids/app.pid) 2>/dev/null || true; fi
 	@rm -rf .pids
 	@echo "$(GREEN)All port forwards stopped!$(NC)"
-
-#==============================================================================
-# Utility
-#==============================================================================
 
 logs-app: ## View application logs from Kubernetes
 	kubectl logs -l app.kubernetes.io/name=$(APP_NAME) -n $(NAMESPACE) -f

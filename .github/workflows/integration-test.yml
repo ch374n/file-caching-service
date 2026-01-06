@@ -1,0 +1,89 @@
+name: Integration Tests
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+env:
+  R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+
+jobs:
+  integration-test:
+    name: Integration Tests (Kind)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
+
+      - name: Setup Kind
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: file-caching-test
+          wait: 60s
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.13.0'
+
+      - name: Build and load image into Kind
+        run: make kind-load-image
+
+      - name: Deploy with Helm
+        run: make kind-deploy
+
+      - name: Wait for pods to be ready
+        run: make kind-wait-ready
+
+      - name: Start port-forward
+        run: |
+          make kind-port-forward
+          sleep 5
+
+      - name: Verify service is ready
+        run: |
+          for i in {1..30}; do
+            if curl -s http://localhost:8080/health | grep -q "healthy"; then
+              echo "Service is ready!"
+              exit 0
+            fi
+            echo "Waiting for service... attempt $i"
+            sleep 2
+          done
+          echo "Service failed to become ready"
+          kubectl logs -l app.kubernetes.io/name=file-caching-service --tail=50
+          exit 1
+
+      - name: Run integration tests
+        run: make kind-run-tests
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "=== Application Logs ==="
+          kubectl logs -l app.kubernetes.io/name=file-caching-service --tail=100
+          echo ""
+          echo "=== Redis Logs ==="
+          kubectl logs -l app.kubernetes.io/component=redis --tail=50
+          echo ""
+          echo "=== Pod Status ==="
+          kubectl get pods -o wide
+          echo ""
+          echo "=== Pod Descriptions ==="
+          kubectl describe pods
+
+      - name: Cleanup
+        if: always()
+        run: make kind-delete
