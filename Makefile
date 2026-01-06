@@ -174,7 +174,7 @@ kind-port-forward: ## Start port-forward to Kind cluster (background)
 
 kind-run-tests: ## Run integration tests against Kind cluster
 	@echo "$(GREEN)Running integration tests...$(NC)"
-	SERVICE_URL=http://localhost:8080 go test -v ./tests/integration/... -timeout 5m
+	SERVICE_URL=http://localhost:8080 TEST_FILE_NAME=$(TEST_FILE_NAME) go test -v ./tests/integration/... -timeout 5m
 
 kind-test: kind-create kind-load-image kind-deploy kind-wait-ready kind-port-forward kind-run-tests ## Full integration test pipeline
 	@echo "$(GREEN)Integration tests completed!$(NC)"
